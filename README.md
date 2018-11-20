@@ -1,4 +1,4 @@
-# bridge-game
+# gym-bridge
 
 OpenAI Gym Style Pseudo-Bridge Environment. Build based on
 https://github.com/openai/gym/tree/master/gym/envs#how-to-create-new-environments-for-gym
@@ -18,8 +18,8 @@ Python >= 3.5
 
 ## Install
 
-    git clone https://github.com/kapilsinha/bridge-game.git
-    cd bridge-game/
+    git clone https://github.com/kapilsinha/gym-bridge.git
+    cd gym-bridge/
     pip install -e .
 
 
