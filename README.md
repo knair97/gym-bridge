@@ -22,7 +22,12 @@ Python >= 3.5
     cd gym-bridge/
     pip install -e .
 
+## Contribute
 
+Feel free to contribute to the repository! Note that all code must be well documented and
+each commit message must be informative and properly formatted by the guidelines specified
+in https://chris.beams.io/posts/git-commit/. Any commit not conforming to these guidelines
+wlil be removed permanently from the repository.
 <!--
 ## Try example agents
 
