@@ -1,4 +1,5 @@
 import random
+import numpy as np
 import gym
 from gym import spaces
 import logging
@@ -107,7 +108,7 @@ class Player:
         """
         assert name in ["West", "North", "East", "South"]
         self.name = name
-        sorted_cards = sorted(self.cards, \
+        sorted_cards = sorted(cards, \
             key = lambda card : (card.suit, card.value))
         self.cards = sorted_cards
         self.points = self.calc_points()
@@ -146,7 +147,7 @@ class Player:
         return self.cards
 
     def get_points(self):
-        return points
+        return self.points
 
     def __str__(self):
         """
@@ -158,7 +159,7 @@ class Player:
 
 
 class GameState:
-    def __init__(self, start_player_name = "West"):
+    def __init__(self, start_player_name="West"):
         """
         Players: {Player name: Player} e.g. {"West": Player_west, ...}
         Bid history: List of (Player, bid) e.g. [(Player, bid), ...]
@@ -166,7 +167,7 @@ class GameState:
         self.reset(start_player_name)
 
     def reset(self, start_player_name):
-        self.players = self.players = self.assign_cards_to_players()
+        self.players = self.assign_cards_to_players()
         self.bid_history = []
         assert start_player_name in ["West", "North", "East", "South"]
         self.next_player = self.players[start_player_name]
@@ -201,32 +202,46 @@ class GameState:
         player_south = Player("South", cards[39:])
         return {"West": player_west, "North": player_north, \
                 "East": player_east, "South": player_south}
+                
+    def leading_bid(self):
+        '''
+        Returns the maximum bid made so far.
+        If no (non-pass) bids have been made, returns -1.
+        '''
+        bids = [turn[1] for turn in self.bid_history if turn[1] != "pass"]
+        return max(bids) if bids else -1
 
     def make_bid(self, bid):
         """
         Given a bid, adds the bid to the bid history.
         Bid must be a possible sum of points in a team and so must be
-        in the range (0, ..., 52). A player can also pass.
+        in the range (0, ..., MAX_BID). A player can also pass.
         Changes the next_player appropriately based on players moving
         clockwise
         """
-        assert (bid <= 52 and bid >= 0) | (bid == "pass")
-        # TODO: check that the bid is higher than the last non-pass bid
+        assert ((bid == "pass") or (bid <= MAX_BID and bid > self.leading_bid()))
         cur_player = self.next_player
         self.bid_history.append((cur_player, bid))
-        # Cards are played clockwise
+        # Cards are played clockwise (W -> N -> E -> S -> ...)
         next_player_dict = {"West": "North", "North": "East", \
                             "East": "South", "South": "West"}
         self.next_player = self.players[next_player_dict[cur_player.get_name()]]
+        
+    def invalid_bids(self):
+        '''
+        Return a list of bids that cannot be played.
+        '''
+        return list(range(self.leading_bid() + 1))
 
     def __str__(self):
-        string = "Player 1: " + str(self.players[0]) + "\n"
-               + "Player 2: " + str(self.players[1]) + "\n"
-               + "Player 3: " + str(self.players[2]) + "\n"
-               + "Player 4: " + str(self.players[3]) + "\n"
-        bid_history_string = ", ".join(["Player " + bid[0].get_name() \
-                                        + "- bid: " + str(bid[1])])
-        return string + bid_history_string
+        if self.bid_history:
+            bid = self.bid_history[-1]
+            string = bid[0].get_name() + " bid: " + str(bid[1])
+        else:
+            names = ["West", "North", "East", "South"]
+            string = '\n'.join([str(self.players[name]) for name in names])
+        
+        return string
 
 
 class BridgeEnv(gym.Env):
@@ -235,40 +250,74 @@ class BridgeEnv(gym.Env):
     """
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, alpha=0.02, show_number=False, start_player_name = 'West'):
-        # Discrete: https://github.com/openai/gym/blob/master/gym/spaces/discrete.py
-        # Technically contains 0 in the action space - if this matters, I think you
-        # can make a one-dimensional box that has a lower bound
-        self.action_space = spaces.Discrete(MAX_BID)
-        # Box: https://github.com/openai/gym/blob/master/gym/spaces/box.py
-        self.observation_space = spaces.Box(low=np.array([0,0,0]), \
-            high=np.array([3, MAX_BID, MAX_BID]))
-        self.alpha = alpha
-        self.state = GameState()
+    def __init__(self, start_player_name='West', seed=None):
+        # See https://github.com/openai/gym/blob/master/gym/spaces/
+        # for different types of spaces
+        
+        # In the action space:
+        # the 2-tuple (x, y) represents
+        #   pass if x = 1 (in this case y is ignored)
+        #   bid y if x = 0
+        self.action_space = spaces.MultiDiscrete((2, MAX_BID + 1))
+        
+        # In the observation space:
+        #   there are 3 2-tuples corresponding to the actions of the 3
+        #   previous players, represented the same way as the action space
+        # TODO:
+        #   player also needs to observe their own point total
+        #       -- but do we need to include this on every turn?
+        self.observation_space = spaces.Tuple((   \
+            spaces.MultiDiscrete((2, MAX_BID + 1)), \
+            spaces.MultiDiscrete((2, MAX_BID + 1)), \
+            spaces.MultiDiscrete((2, MAX_BID + 1))))
+        
+        if seed:
+            # TODO: somehow seed the card shuffling,
+            # maybe pass as argument to GameState() constructor
+            pass
+        self.state = GameState(start_player_name=start_player_name)
         self.done = False
-        #self._seed()
-        self._reset(start_player_name)
+        
+    @staticmethod
+    def _bid_to_action(bid):
+        return (1, 0) if bid == "pass" else (0, bid)
+        
+    @staticmethod
+    def _action_to_bid(action):
+        return "pass" if action[0] == 1 else action[1]
 
-    '''
-    # I don't know if these functions are useful for us so I commented them out
-    # Use them to understand what the examples are doing
-    
-    def set_start_mark(self, mark):
-        self.start_mark = mark
+    def sample_action(self, pi=np.ones((2, MAX_BID + 1))):
+        # Sample an action according to distribution pi. Invalid moves are
+        # set to probability 0 before sampling. pi is uniform by default.
+        #
+        # Arguments:
+        #   pi  - distribution over the action space
+        #       - (np.array, shape=(2, MAX_BID + 1) )
+        #
+        # Returns:
+        #   An action (x, y) in the action space
+        
+        for bid in self.state.invalid_bids():
+            x, y = self._bid_to_action(bid)
+            pi[x, y] = 0
+        
+        pi = (pi / np.sum(pi)).flatten()
+        idx = np.random.choice(np.arange(2 * (MAX_BID + 1)), p=pi)
+        actions = [(i, j) for i in range(2) for j in range(MAX_BID + 1)]
+        
+        return np.array(actions[idx])
 
-    '''
-
-    def _reset(self, start_player_name):
+    def reset(self, start_player_name='West'):
         self.state.reset(start_player_name)
+        self.done = False
 
         return self._get_obs()
-    
 
-    def _step(self, action):
+    def step(self, action):
         """Step environment by action.
 
         Args:
-            action (int): Location
+            action (np.array, shape=(2,)): Bid
 
         Returns:
             list: Observation
@@ -278,7 +327,9 @@ class BridgeEnv(gym.Env):
         """
         assert self.action_space.contains(action)
 
-        loc = action
+        # not sure if this is the correct behavior...
+        # how will the players other than the final bidder know their reward?
+        # maybe it makes more sense to return reward as a tuple
         if self.done:
             return self._get_obs(), 0, True, None
 
@@ -286,12 +337,15 @@ class BridgeEnv(gym.Env):
         prev_status = check_game_status(self.state)
         
         # Make the bid
-        self.state.make_bid(action)
+        bid = self._action_to_bid(action)
+        self.state.make_bid(bid)
+        
         status = check_game_status(self.state)
         # Idk if this works and hopefully we don't have to log for debugging
         # but again it's here for compatibility
         logging.debug("check_game_status state {} : status {}" \
             .format(self.state, status))
+        # Kapil:
         # TODO: Not sure if reward should be calculated this way - check it
         # Reward = raise in their bid for the player who played last
         # if the cur_status > 0 (bid is less than the sum of their points)
@@ -301,65 +355,69 @@ class BridgeEnv(gym.Env):
         # NOT SURE if that's a good idea - if you're already above your sum
         # and you pass, should you have a negative reward? This depends on 
         # which team has the max bid rn too...
+        
+        # Bhairav: Here's how I think the reward should work, roughly based
+        # on how actual bridge scoring works. This is a gross approximation b/c
+        # actual bridge scoring is convoluted af. The main point is that in
+        # bridge scoring, there are no negative points; if the team that won
+        # the bidding fails to make their contract, then the opposing team
+        # gets positive points.
+        # Let   S = sum of the max bidder's points and their partner's points
+        #       B = max bid
+        # If S >= B, then
+        #   the reward for the max bidding team is B + (S - B) / 2
+        #       - Note: points for exceeding contract are awarded at discounted rate
+        #       - this incentivizes bidding as close to S as possible
+        #   the reward for the opposing team is 0
+        # If S < B, then
+        #   the reward for the max bidding team is 0
+        #   the reward for the opposing team is 2 * (B - S)
         if status[0] != 1:
             self.done = True
         if status[0] == 1:
-            if state.bid_history[-1][1] == "pass":
+            if self.state.bid_history[-1][1] == "pass":
                 reward = 0
-            elif state.get_last_player().get_name() in ["West", "East"]:
+            elif self.state.get_last_player().get_name() in ["West", "East"]:
                 if status[1] > 0:
                     reward = status[1] - prev_status[1]
                 else:
                     # shoulda made a getter but that's pedantic
-                    reward = state.we_sum_points * -1
+                    reward = self.state.we_sum_points * -1
             else:
                 if status[2] > 0:
                     reward = status[2] - prev_status[2]
                 else:
-                    reward = state.ns_sum_points * -1
+                    reward = self.state.ns_sum_points * -1
 
         return self._get_obs(), reward, self.done, None
 
     def _get_obs(self):
         """
-        Returns the (num, WE, NS) based on the game status
-        Perhaps return the game state in some way?
-        Not sure what the observation space should be
+        Returns the bids made by the last three players.
+        
+        The returned vector always has length 3, so if the game just started
+        this vector is padded with passes
         """
-        return check_game_status(self.state)
+        history = self.state.bid_history
+        pad = [self._bid_to_action("pass")] * (3 - len(history))
+        obs = pad + [self._bid_to_action(turn[1]) for turn in history[-3:]]
+        obs = [np.array(action) for action in obs]
+        assert self.observation_space.contains(obs)
+        return obs
 
-    def _render(self, mode='human', close=False):
-        if close:
-            return
+    def render(self, mode='human'):
         if mode == 'human':
-            self._show_state(print)  # NOQA
-            print('')
+            showfn = print
         else:
-            self._show_state(logging.info)
-            logging.info('')
-
-    def show_episode(self, human, episode):
-        self._show_episode(print if human else logging.warning, episode)
-
-    def _show_episode(self, showfn, episode):
-        showfn("==== Episode {} ====".format(episode))
-
-    def _show_state(self, showfn):
-        """
-        Display the state
-        """
-        showfn(str(self.state))
+            showfn = logging.info
+        showfn(str(self.state) + '\n')
 
     def show_turn(self, human):
-        self._show_turn(print if human else logging.info)
-
-    def _show_turn(self, showfn):
+        showfn = print if human else logging.info
         showfn("Player {}'s turn.".format(self.state.next_player.get_name()))
 
     def show_result(self, human):
-        self._show_result(print if human else logging.info)
-
-    def _show_result(self, showfn):
+        showfn = print if human else logging.info
         status = check_game_status(self.state)
         last_nopass_player = self.state.bid_history[-4].get_name()
         assert status[0] != 1
@@ -376,7 +434,7 @@ class BridgeEnv(gym.Env):
                 msg = "Team {0} wins bidding. They bid under their max winnable bid by {1} hands!" \
                     .format(team_name, status[idx])
             elif status[idx] == 0:
-                msg = "Team {0} wins bidding and bids exactly thir max winnable bid!" \
+                msg = "Team {0} wins bidding and bids exactly their max winnable bid!" \
                     .format(team_name)
             else:
                 msg = "Team {0} wins bidding. They bid over their max winnable bid by {1} hands!" \
@@ -387,7 +445,7 @@ class BridgeEnv(gym.Env):
         for _, bid in self.state.bid_history:
             if bid != "pass":
                 highest_bid = bid
-        return ['pass'] + list(range(highest_bid + 1, MAX_BID))
+        return list(range(highest_bid + 1, MAX_BID))
 
 
 def set_log_level_by(verbosity):
