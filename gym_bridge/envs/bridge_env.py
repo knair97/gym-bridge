@@ -163,7 +163,10 @@ class GameState:
         Players: {Player name: Player} e.g. {"West": Player_west, ...}
         Bid history: List of (Player, bid) e.g. [(Player, bid), ...]
         """
-        self.players = self.assign_cards_to_players()
+        self.reset(start_player_name)
+
+    def reset(self, start_player_name):
+        self.players = self.players = self.assign_cards_to_players()
         self.bid_history = []
         assert start_player_name in ["West", "North", "East", "South"]
         self.next_player = self.players[start_player_name]
@@ -214,7 +217,7 @@ class GameState:
         # Cards are played clockwise
         next_player_dict = {"West": "North", "North": "East", \
                             "East": "South", "South": "West"}
-        self.next_player = next_player_dict[cur_player.get_name()]
+        self.next_player = self.players[next_player_dict[cur_player.get_name()]]
 
     def __str__(self):
         string = "Player 1: " + str(self.players[0]) + "\n"
@@ -232,7 +235,7 @@ class BridgeEnv(gym.Env):
     """
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, alpha=0.02, show_number=False):
+    def __init__(self, alpha=0.02, show_number=False, start_player_name = 'West'):
         # Discrete: https://github.com/openai/gym/blob/master/gym/spaces/discrete.py
         # Technically contains 0 in the action space - if this matters, I think you
         # can make a one-dimensional box that has a lower bound
@@ -244,7 +247,7 @@ class BridgeEnv(gym.Env):
         self.state = GameState()
         self.done = False
         #self._seed()
-        #self._reset()
+        self._reset(start_player_name)
 
     '''
     # I don't know if these functions are useful for us so I commented them out
@@ -253,12 +256,13 @@ class BridgeEnv(gym.Env):
     def set_start_mark(self, mark):
         self.start_mark = mark
 
-    def _reset(self):
-        self.stateboard = [0] * NUM_LOC
-        self.mark = self.start_mark
-        self.done = False
-        return self._get_obs()
     '''
+
+    def _reset(self, start_player_name):
+        self.state.reset(start_player_name)
+
+        return self._get_obs()
+    
 
     def _step(self, action):
         """Step environment by action.
@@ -383,7 +387,7 @@ class BridgeEnv(gym.Env):
         for _, bid in self.state.bid_history:
             if bid != "pass":
                 highest_bid = bid
-        return list(range(highest_bid + 1, MAX_BID))
+        return ['pass'] + list(range(highest_bid + 1, MAX_BID))
 
 
 def set_log_level_by(verbosity):
