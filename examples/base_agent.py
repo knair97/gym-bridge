@@ -25,10 +25,8 @@ class BaseAgent(object):
 
         curr_player_points = env.state.get_points(self.name)
 
-        # if team_bid >= curr_player_points + 30:
-        #     print('ye')
-
-        #     return np.array([1, MAX_BID])
+        if team_bid >= curr_player_points + 30:
+            return np.array([1, MAX_BID])
             
         return env.sample_action()
 
