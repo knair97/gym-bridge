@@ -1,35 +1,36 @@
 #!/usr/bin/env python
 import random
+import numpy as np
 
-from bridge_game.env import BridgeGameEnv, agent_by_mark, check_game_status,\
-    after_action_state, tomark, next_mark
+from gym_bridge.envs.bridge_env import BridgeEnv, check_game_status,\
+    after_action_state
 
+MAX_BID = 52
 
 class BaseAgent(object):
     def __init__(self, name):
         self.name = name
 
-    def act(self, state, ava_actions, env):
-        for action in ava_actions:
-            nstate = after_action_state(state, action)
-            # gstatus is going to be 1 (game in progress)
-            (gstatus, WE, NS) = check_game_status(nstate)
-            assert(gstatus == 1)
+    def act(self, env):
+        state = env.state
+        ava_actions = env.available_actions() # this function needs to be fixed
 
-            team_bid = None
-            if self.name in ['West', 'East']:
-                team_bid = WE
-            else:
-                team_bid = NS
+        (gstatus, WE, NS) = check_game_status(state)
 
-            curr_player_points = None
-            for player in env.state.players:
-                if player.name == self.name:
-                    curr_player_points = player.points
+        team_bid = None
+        if self.name in ['West', 'East']:
+            team_bid = WE
+        else:
+            team_bid = NS
 
-            if team_bid >= curr_player_points + 20:
-                return 'pass'
-        return random.choice(ava_actions)
+        curr_player_points = env.state.get_points(self.name)
+
+        # if team_bid >= curr_player_points + 30:
+        #     print('ye')
+
+        #     return np.array([1, MAX_BID])
+            
+        return env.sample_action()
 
 
 def play(max_episode=10):
@@ -46,32 +47,29 @@ def play(max_episode=10):
     WE_point_total = 0
     NS_point_total = 0
     while episode < max_episode:
-        state = env.reset(start_player_name = start_name)
+        last_3_bids = env.reset(start_player_name = start_name)
         
         done = False
         while not done:
-            curr_agent = agents[state.next_player.name]
+            print(check_game_status(env.state))
+            curr_agent = agents[env.get_player_name()]
             env.show_turn(True)
 
-            ava_actions = env.available_actions()
-            action = agent.act(state, ava_actions)
-            state_tuple, reward, done, info = env.step(action)
-            state = env.state
+            action = curr_agent.act(env)
+            print(action)
+            last_3_bids, reward, done, info = env.step(action)
             env.render()
 
             if done:
-                env.show_result(True)
+                state_tuple = check_game_status(env.state)
+                winning_team, bid = env.show_result(True)
                 _, WE_score, NS_score = state_tuple
                 WE_bid, NS_bid = 0, 0
-                if state.get_last_player.name in ['East', 'West']:
-                    WE_bid, NS_bid = env.state.bid_history[-1][1], env.state.bid_history[-2][1]
-                else:
-                    NS_bid, WE_bid = env.state.bid_history[-1][1], env.state.bid_history[-2][1]
-
-                if WE_bid > NS_bid and WE_score >= 0:
+                if winning_team == 'West/East' and WE_score >= 0:
                     WE_point_total += WE_bid
-                elif WE_bid < NS_bid and NS_score >= 0:
+                elif winning_team == 'North/South' and NS_score >= 0:
                     NS_point_total += NS_score
+                    
                 break
         # rotate start
         start_name, _ = random.choice(list(agents.items()))
