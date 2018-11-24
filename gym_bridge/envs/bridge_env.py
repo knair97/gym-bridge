@@ -166,6 +166,9 @@ class GameState:
         """
         self.reset(start_player_name)
 
+    def get_points(self, player_name):
+        return self.players[player_name].get_points()
+
     def reset(self, start_player_name):
         self.players = self.assign_cards_to_players()
         self.bid_history = []
@@ -416,10 +419,14 @@ class BridgeEnv(gym.Env):
         showfn = print if human else logging.info
         showfn("Player {}'s turn.".format(self.state.next_player.get_name()))
 
+    def get_player_name(self):
+        return self.state.next_player.get_name()
+
     def show_result(self, human):
         showfn = print if human else logging.info
         status = check_game_status(self.state)
-        last_nopass_player = self.state.bid_history[-4].get_name()
+        last_nopass_player = self.state.bid_history[-4][0].get_name()
+        team_name = None
         assert status[0] != 1
         if status[0] == 0:
             showfn("==== Finished: Starting four bids were all passes ====")
@@ -439,6 +446,8 @@ class BridgeEnv(gym.Env):
             else:
                 msg = "Team {0} wins bidding. They bid over their max winnable bid by {1} hands!" \
                     .format(team_name, -1 * status[idx])
+
+        return team_name, self.state.bid_history[-4][1]
 
     def available_actions(self):
         highest_bid = -1
