@@ -5,6 +5,8 @@ from gym import spaces
 import logging
 
 MAX_BID = 52
+PASS = 0
+
 LOG_FMT = logging.Formatter('%(levelname)s '
                             '[%(filename)s:%(lineno)d] %(message)s',
                             '%Y-%m-%d %H:%M:%S')
@@ -51,7 +53,7 @@ def check_game_status(state):
     
     hist = state.bid_history
     for i in range(len(hist)):
-        if hist[i][1] == "pass":
+        if hist[i][1] == PASS:
             continue
         if hist[i][0].get_name() in ["West", "East"]:
             we_final_bid = hist[i][1]
@@ -64,11 +66,11 @@ def check_game_status(state):
     if len(hist) < 4:
         return (1, WE, NS)
     
-    if len(hist) == 4 and hist[0][1] == "pass" and hist[1][1] == "pass" \
-        and hist[2][1] == "pass" and hist[3][1] == "pass":
+    if len(hist) == 4 and hist[0][1] == PASS and hist[1][1] == PASS \
+        and hist[2][1] == PASS and hist[3][1] == PASS:
             return (0, 0, 0)
 
-    if hist[-1][1] == "pass" and hist[-2][1] == "pass" and hist[-3][1] == "pass":
+    if hist[-1][1] == PASS and hist[-2][1] == PASS and hist[-3][1] == PASS:
         if hist[-4][0].get_name() in ["West", "East"]:
             return (2, WE, NS)
         return (3, WE, NS)
@@ -211,7 +213,7 @@ class GameState:
         Returns the maximum bid made so far.
         If no (non-pass) bids have been made, returns -1.
         '''
-        bids = [turn[1] for turn in self.bid_history if turn[1] != "pass"]
+        bids = [turn[1] for turn in self.bid_history if turn[1] != PASS]
         return max(bids) if bids else -1
 
     def make_bid(self, bid):
@@ -234,7 +236,11 @@ class GameState:
         '''
         Return a list of bids that cannot be played.
         '''
-        return list(range(self.leading_bid() + 1))
+        ret = list(range(self.leading_bid() + 1))
+        if ret[0] == PASS:
+            ret = ret[1:]
+
+        return ret
 
     def __str__(self):
         if self.bid_history:
@@ -258,10 +264,9 @@ class BridgeEnv(gym.Env):
         # for different types of spaces
         
         # In the action space:
-        # the 2-tuple (x, y) represents
-        #   pass if x = 1 (in this case y is ignored)
-        #   bid y if x = 0
-        self.action_space = spaces.MultiDiscrete((2, MAX_BID + 1))
+        # 1 - 52: bid that number
+        # 0: pass
+        self.action_space = spaces.Discrete(MAX_BID + 1)
         
         # In the observation space:
         #   there are 3 2-tuples corresponding to the actions of the 3
@@ -270,9 +275,9 @@ class BridgeEnv(gym.Env):
         #   player also needs to observe their own point total
         #       -- but do we need to include this on every turn?
         self.observation_space = spaces.Tuple((   \
-            spaces.MultiDiscrete((2, MAX_BID + 1)), \
-            spaces.MultiDiscrete((2, MAX_BID + 1)), \
-            spaces.MultiDiscrete((2, MAX_BID + 1))))
+            spaces.Discrete(MAX_BID + 1), \
+            spaces.Discrete(MAX_BID + 1), \
+            spaces.Discrete(MAX_BID + 1) ))
         
         if seed:
             # TODO: somehow seed the card shuffling,
@@ -280,16 +285,8 @@ class BridgeEnv(gym.Env):
             pass
         self.state = GameState(start_player_name=start_player_name)
         self.done = False
-        
-    @staticmethod
-    def _bid_to_action(bid):
-        return (1, 0) if bid == "pass" else (0, bid)
-        
-    @staticmethod
-    def _action_to_bid(action):
-        return "pass" if action[0] == 1 else action[1]
 
-    def sample_action(self, pi=np.ones((2, MAX_BID + 1))):
+    def sample_action(self, pi=np.ones(MAX_BID + 1)):
         # Sample an action according to distribution pi. Invalid moves are
         # set to probability 0 before sampling. pi is uniform by default.
         #
@@ -301,12 +298,11 @@ class BridgeEnv(gym.Env):
         #   An action (x, y) in the action space
         
         for bid in self.state.invalid_bids():
-            x, y = self._bid_to_action(bid)
-            pi[x, y] = 0
+            pi[bid] = 0
         
-        pi = (pi / np.sum(pi)).flatten()
-        idx = np.random.choice(np.arange(2 * (MAX_BID + 1)), p=pi)
-        actions = [(i, j) for i in range(2) for j in range(MAX_BID + 1)]
+        pi = pi / np.sum(pi)
+        idx = np.random.choice(np.arange(MAX_BID + 1), p=pi)
+        actions = [i for i in range(MAX_BID + 1)]
         
         return np.array(actions[idx])
 
@@ -320,7 +316,7 @@ class BridgeEnv(gym.Env):
         """Step environment by action.
 
         Args:
-            action (np.array, shape=(2,)): Bid
+            action int: Bid (or 0 for pass)
 
         Returns:
             list: Observation
@@ -340,8 +336,7 @@ class BridgeEnv(gym.Env):
         prev_status = check_game_status(self.state)
         
         # Make the bid
-        bid = self._action_to_bid(action)
-        self.state.make_bid(bid)
+        self.state.make_bid(action)
         
         status = check_game_status(self.state)
         # Idk if this works and hopefully we don't have to log for debugging
@@ -378,7 +373,7 @@ class BridgeEnv(gym.Env):
         if status[0] != 1:
             self.done = True
         if status[0] == 1:
-            if self.state.bid_history[-1][1] == "pass":
+            if self.state.bid_history[-1][1] == PASS:
                 reward = 0
             elif self.state.get_last_player().get_name() in ["West", "East"]:
                 if status[1] > 0:
@@ -402,9 +397,9 @@ class BridgeEnv(gym.Env):
         this vector is padded with passes
         """
         history = self.state.bid_history
-        pad = [self._bid_to_action("pass")] * (3 - len(history))
-        obs = pad + [self._bid_to_action(turn[1]) for turn in history[-3:]]
-        obs = [np.array(action) for action in obs]
+        pad = [PASS] * (3 - len(history))
+        obs = pad + [turn[1] for turn in history[-3:]]
+
         assert self.observation_space.contains(obs)
         return obs
 
@@ -452,9 +447,12 @@ class BridgeEnv(gym.Env):
     def available_actions(self):
         highest_bid = -1
         for _, bid in self.state.bid_history:
-            if bid != "pass":
-                highest_bid = bid
-        return list(range(highest_bid + 1, MAX_BID))
+            highest_bid = bid
+        ret = list(range(highest_bid + 1, MAX_BID + 1))
+        if ret[0] != PASS:
+            ret = [PASS] + ret
+
+        return ret
 
 
 def set_log_level_by(verbosity):
