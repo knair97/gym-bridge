@@ -4,29 +4,27 @@ import numpy as np
 
 from gym_bridge.envs.bridge_env import BridgeEnv, check_game_status,\
     after_action_state
-
+    
+PASS = 0
 MAX_BID = 52
 
 class BaseAgent(object):
     def __init__(self, name):
         self.name = name
 
-    def act(self, env):
-        state = env.state
-        ava_actions = env.available_actions() # this function needs to be fixed
-
-        (gstatus, WE, NS) = check_game_status(state)
+    def act(self, obs):
+        third_last, second_last, last, WE_bid, NS_bid, points = obs
 
         team_bid = None
         if self.name in ['West', 'East']:
-            team_bid = WE
+            team_bid = WE_bid
         else:
-            team_bid = NS
+            team_bid = NS_bid
 
-        curr_player_points = env.state.get_points(self.name)
+        curr_player_points = points
 
         if team_bid >= curr_player_points + 30:
-            return np.array([1, MAX_BID])
+            return PASS
             
         return env.sample_action()
 
@@ -45,27 +43,29 @@ def play(max_episode=10):
     WE_point_total = 0
     NS_point_total = 0
     while episode < max_episode:
-        last_3_bids = env.reset(start_player_name = start_name)
+        obs = env.reset(start_player_name = start_name)
         
         done = False
         while not done:
-            print(check_game_status(env.state))
-            curr_agent = agents[env.get_player_name()]
+            print(check_game_status(env))
+            done, obs, info = check_game_status(env)
+
+            curr_agent = agents[info['cur_player']]
             env.show_turn(True)
 
-            action = curr_agent.act(env)
-            last_3_bids, reward, done, info = env.step(action)
+            action = curr_agent.act(obs)
+            obs, reward, done, info = env.step(action)
             env.render()
 
             if done:
-                state_tuple = check_game_status(env.state)
+                done, obs, info = check_game_status(env)
                 winning_team, bid = env.show_result(True)
-                _, WE_score, NS_score = state_tuple
-                WE_bid, NS_bid = 0, 0
-                if winning_team == 'West/East' and WE_score >= 0:
+                
+                third_last, second_last, last, WE_bid, NS_bid, points = obs
+                if winning_team == 'West/East':
                     WE_point_total += WE_bid
-                elif winning_team == 'North/South' and NS_score >= 0:
-                    NS_point_total += NS_score
+                elif winning_team == 'North/South':
+                    NS_point_total += NS_bid
                     
                 break
         # rotate start

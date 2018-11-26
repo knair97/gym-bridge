@@ -5,6 +5,7 @@ from gym import spaces
 import logging
 
 MAX_BID = 52
+MAX_POINTS = 52
 PASS = 0
 
 LOG_FMT = logging.Formatter('%(levelname)s '
@@ -29,7 +30,18 @@ def after_action_state(state, action):
     state.make_bid(action)
     return state
 
-def check_game_status(state):
+def check_game_status(env):
+    '''
+    returns done: bool, True if game is don
+            obs: current observation (6-tuple)
+            additional_info: dict with name of current player
+    '''
+    info = {
+        'cur_player': env.state.next_player.name
+    }
+    return (env.done, env._get_obs(), info)
+
+def reward_calc_helper(state):
     """
     Return game status by current game state. A game finishes when the last
     last bids are all passes.
@@ -269,15 +281,22 @@ class BridgeEnv(gym.Env):
         self.action_space = spaces.Discrete(MAX_BID + 1)
         
         # In the observation space:
-        #   there are 3 2-tuples corresponding to the actions of the 3
+        #   there are 3 tuples corresponding to the actions of the 3
         #   previous players, represented the same way as the action space
+        #   The next two tuples correspond to the max bid of West/East, and
+        #   North/South respectively
+        #   The last tuple is the number of points of the current player
         # TODO:
         #   player also needs to observe their own point total
         #       -- but do we need to include this on every turn?
         self.observation_space = spaces.Tuple((   \
-            spaces.Discrete(MAX_BID + 1), \
-            spaces.Discrete(MAX_BID + 1), \
-            spaces.Discrete(MAX_BID + 1) ))
+            spaces.Discrete(MAX_BID + 1),   \
+            spaces.Discrete(MAX_BID + 1),   \
+            spaces.Discrete(MAX_BID + 1),   \
+            spaces.Discrete(MAX_BID + 1),   \
+            spaces.Discrete(MAX_BID + 1),   \
+            spaces.Discrete(MAX_POINTS + 1) \
+        ))
         
         if seed:
             # TODO: somehow seed the card shuffling,
@@ -336,12 +355,12 @@ class BridgeEnv(gym.Env):
             return self._get_obs(), 0, True, None
 
         reward = 0
-        prev_status = check_game_status(self.state)
+        prev_status = reward_calc_helper(self.state)
         
         # Make the bid
         self.state.make_bid(action)
         
-        status = check_game_status(self.state)
+        status = reward_calc_helper(self.state)
         # Idk if this works and hopefully we don't have to log for debugging
         # but again it's here for compatibility
         logging.debug("check_game_status state {} : status {}" \
@@ -390,11 +409,15 @@ class BridgeEnv(gym.Env):
                 else:
                     reward = self.state.ns_sum_points * -1
 
-        return self._get_obs(), reward, self.done, None
+        additional_info = {
+            'cur_player': self.state.next_player.name
+        }
+        return self._get_obs(), reward, self.done, additional_info
 
     def _get_obs(self):
         """
-        Returns the bids made by the last three players.
+        Returns the bids made by the last three players, max bid of West/East,
+        max bid of North/South
         
         The returned vector always has length 3, so if the game just started
         this vector is padded with passes
@@ -402,6 +425,27 @@ class BridgeEnv(gym.Env):
         history = self.state.bid_history
         pad = [PASS] * (3 - len(history))
         obs = pad + [turn[1] for turn in history[-3:]]
+
+
+        we_final_bid, ns_final_bid = 0, 0
+    
+        hist = state.bid_history
+        for i in range(len(hist)):
+            if hist[i][1] == PASS:
+                continue
+            if hist[i][0].get_name() in ["West", "East"]:
+                we_final_bid = hist[i][1]
+            else:
+                ns_final_bid = hist[i][1]
+
+        # add max bid of West/East
+        obs.append(we_final_bid)
+
+        # add max bid of North/South
+        obs.append(ns_final_bid)
+
+        # add points for current player
+        obs.append(self.state.next_player.get_points())
 
         assert self.observation_space.contains(obs)
         return obs
