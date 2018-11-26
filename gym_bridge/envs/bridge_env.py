@@ -224,7 +224,7 @@ class GameState:
         Changes the next_player appropriately based on players moving
         clockwise
         """
-        assert ((bid == "pass") or (bid <= MAX_BID and bid > self.leading_bid()))
+        assert ((bid == PASS) or (bid <= MAX_BID and bid > self.leading_bid()))
         cur_player = self.next_player
         self.bid_history.append((cur_player, bid))
         # Cards are played clockwise (W -> N -> E -> S -> ...)
@@ -237,7 +237,7 @@ class GameState:
         Return a list of bids that cannot be played.
         '''
         ret = list(range(self.leading_bid() + 1))
-        if ret[0] == PASS:
+        if len(ret) != 0 and ret[0] == PASS:
             ret = ret[1:]
 
         return ret
@@ -286,7 +286,7 @@ class BridgeEnv(gym.Env):
         self.state = GameState(start_player_name=start_player_name)
         self.done = False
 
-    def sample_action(self, pi=np.ones(MAX_BID + 1)):
+    def sample_action(self, pi=None ):
         # Sample an action according to distribution pi. Invalid moves are
         # set to probability 0 before sampling. pi is uniform by default.
         #
@@ -297,6 +297,9 @@ class BridgeEnv(gym.Env):
         # Returns:
         #   An action (x, y) in the action space
         
+        if pi is None:
+            pi = np.ones(MAX_BID + 1)
+
         for bid in self.state.invalid_bids():
             pi[bid] = 0
         
@@ -449,7 +452,7 @@ class BridgeEnv(gym.Env):
         for _, bid in self.state.bid_history:
             highest_bid = bid
         ret = list(range(highest_bid + 1, MAX_BID + 1))
-        if ret[0] != PASS:
+        if len(ret) != 0 and ret[0] != PASS:
             ret = [PASS] + ret
 
         return ret

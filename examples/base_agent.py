@@ -54,7 +54,6 @@ def play(max_episode=10):
             env.show_turn(True)
 
             action = curr_agent.act(env)
-            print(action)
             last_3_bids, reward, done, info = env.step(action)
             env.render()
 
