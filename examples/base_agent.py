@@ -12,7 +12,7 @@ class BaseAgent(object):
     def __init__(self, name):
         self.name = name
 
-    def act(self, obs):
+    def act(self, obs, env):
         third_last, second_last, last, WE_bid, NS_bid, points = obs
 
         team_bid = None
@@ -47,13 +47,12 @@ def play(max_episode=10):
         
         done = False
         while not done:
-            print(check_game_status(env))
             done, obs, info = check_game_status(env)
 
             curr_agent = agents[info['cur_player']]
             env.show_turn(True)
 
-            action = curr_agent.act(obs)
+            action = curr_agent.act(obs, env)
             obs, reward, done, info = env.step(action)
             env.render()
 

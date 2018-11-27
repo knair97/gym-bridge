@@ -37,7 +37,8 @@ def check_game_status(env):
             additional_info: dict with name of current player
     '''
     info = {
-        'cur_player': env.state.next_player.name
+        'cur_player': env.state.next_player.name,
+        'throw_out': env.done and len(env.state.bid_history) == 4
     }
     return (env.done, env._get_obs(), info)
 
@@ -429,7 +430,7 @@ class BridgeEnv(gym.Env):
 
         we_final_bid, ns_final_bid = 0, 0
     
-        hist = state.bid_history
+        hist = self.state.bid_history
         for i in range(len(hist)):
             if hist[i][1] == PASS:
                 continue
@@ -466,28 +467,34 @@ class BridgeEnv(gym.Env):
 
     def show_result(self, human):
         showfn = print if human else logging.info
-        status = check_game_status(self.state)
+        status = check_game_status(self)
         last_nopass_player = self.state.bid_history[-4][0].get_name()
         team_name = None
-        assert status[0] != 1
-        if status[0] == 0:
+        assert status[0] == True
+        if status[2]['throw_out']:
             showfn("==== Finished: Starting four bids were all passes ====")
         else:
             if last_nopass_player in ["West", "East"]:
                 idx = 1 # index to the WE portion of status
                 team_name = "West/East"
+                max_bid = status[1][3]
+                num_points = self.state.players['West'].get_points() + self.state.players['East'].get_points()
             else:
                 idx = 2 # index to the NS portion of status
                 team_name = "North/South"
-            if status[idx] > 0:
+                max_bid = status[1][4]
+                num_points = self.state.players['North'].get_points() + self.state.players['South'].get_points()
+            if max_bid < num_points:
                 msg = "Team {0} wins bidding. They bid under their max winnable bid by {1} hands!" \
-                    .format(team_name, status[idx])
+                    .format(team_name, num_points - max_bid)
             elif status[idx] == 0:
                 msg = "Team {0} wins bidding and bids exactly their max winnable bid!" \
                     .format(team_name)
             else:
                 msg = "Team {0} wins bidding. They bid over their max winnable bid by {1} hands!" \
-                    .format(team_name, -1 * status[idx])
+                    .format(team_name, max_bid - num_points)
+
+            showfn(msg + '\n')
 
         return team_name, self.state.bid_history[-4][1]
 
