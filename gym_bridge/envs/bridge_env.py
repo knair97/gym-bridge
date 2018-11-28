@@ -305,29 +305,25 @@ class BridgeEnv(gym.Env):
             pass
         self.state = GameState(start_player_name=start_player_name)
         self.done = False
+        
+    def invalid_moves(self):
+    
+        return np.array(self.state.invalid_bids()).astype(np.int64)
 
-    def sample_action(self, pi=None ):
-        # Sample an action according to distribution pi. Invalid moves are
-        # set to probability 0 before sampling. pi is uniform by default.
-        #
-        # Arguments:
-        #   pi  - distribution over the action space
-        #       - (np.array, shape=(2, MAX_BID + 1) )
+    def sample_action(self):
+        # Sample an action according to distribution the uniform distribution. 
+        # Invalid moves are set to probability 0 before sampling.
         #
         # Returns:
-        #   An action (x, y) in the action space
+        #   An action a in the action space
         
-        if pi is None:
-            pi = np.ones(MAX_BID + 1)
-
-        for bid in self.state.invalid_bids():
-            pi[bid] = 0
+        pi = np.ones(MAX_BID + 1)
+        pi[self.invalid_moves()] = 0
         
         pi = pi / np.sum(pi)
-        idx = np.random.choice(np.arange(MAX_BID + 1), p=pi)
-        actions = [i for i in range(MAX_BID + 1)]
+        a = np.random.choice(np.arange(MAX_BID + 1), p=pi)
         
-        return np.array(actions[idx])
+        return a
 
     def reset(self, start_player_name='West'):
         self.state.reset(start_player_name)
