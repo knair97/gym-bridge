@@ -53,6 +53,55 @@ class nLayerNet(nn.Module):
         
         return x
 
+class PassOrBidNet(nn.Module):
+    '''
+    A neural-net with ReLU activations and output determined as follows. The
+    first entry in the output is the probability of pass, which is determined
+    by the first head of the network (dim 1). The final D_out - 1 entries of
+    the output are the probability of each bid in {1, ..., MAX_BID}, and are
+    determined by multiplying 1 - pass probability by the output of the second
+    head of the network (dim D_out-1).
+    
+        pi(pass | s) = sigmoid(bn + Wn * ReLU(... ReLU(b1 + W1 * o)))
+        pi(bid | s) = (1 - pi(pass | s)) * \
+                        softmax(bn' + Wn' * ReLU(... ReLU(b1 + W1 * o)))
+        
+    Notation:
+        s = state
+        o = observation
+        a = action
+        r = reward
+        pi = agent's action distribution
+        
+    Input shape:    (batch_size, D_in)
+    Output shape:   (batch_size, D_out)
+    '''
+    
+    def __init__(self, params):
+        # params (tuple) - n, D_in, D_h, D_out
+        super(PassOrBidNet, self).__init__()
+        n, D_in, D_h, D_out = params
+        
+        self.l_in = nn.Linear(D_in, D_h)
+        self.l_hs = [nn.Linear(D_h, D_h) for _ in range(n - 2)]
+        self.l_out_bid = nn.Linear(D_h, D_out - 1)
+        self.l_out_pass = nn.Linear(D_h, 1)
+        
+    def forward(self, x):
+        
+        x = self.l_in(x)
+        x = F.relu(x)
+        for l_h in self.l_hs:
+            x = l_h(x)
+            x = F.relu(x)
+        x1 = self.l_out_pass(x)
+        p_pass = F.sigmoid(x1)
+        x2 = self.l_out_bid(x)
+        p_bid = (1 - p_pass) * F.softmax(x2, dim=-1)
+        pi = torch.cat((p_pass, p_bid), -1)
+        
+        return pi
+        
 def torch_to_numpy(tensor):
     return tensor.data.numpy()
     
@@ -100,7 +149,7 @@ class PolicyGradientNNAgent:
         a = np.random.choice(np.arange(len(pi)), p=pi)
         
         if display:
-            print("pi(a | s) =", pi.reshape((3, 3)), sep='\n')
+            print("Probability of pass = %.3f" % pi[0])
         
         # update current episode in replay with observation and chosen action
         if self.trainable:
@@ -188,30 +237,55 @@ class PolicyGradientNNAgent:
             
         return agent
 
-def train(iterations, episodes, verbose=False):
+
+def play(agents, verbose=False):
+    # play a single game and return the final rewards
+    
+    env = BridgeEnv()
+    observation = env.reset(start_player_name='West')
+    if verbose: env.render()
+        
+    done = False
+    while not done:
+        done, obs, info = check_game_status(env)
+
+        curr_agent = agents[info['cur_player']]
+        if verbose: env.show_turn(True)
+            
+        action = curr_agent.move(obs, env.invalid_moves(), display=verbose)
+        obs, reward, done, info = env.step(action)
+        if verbose: env.render()
+        if verbose and done: env.show_result(True)
+        
+    return reward
+        
+def train_vs_self(iterations, episodes, verbose=False):
+    # train for some number of iterations; in each iteration we play out
+    # some number of episodes and then update the weights of each agent
     
     def obs_to_input(o):
         # takes observation vector o and converts it into input for the network
         # TODO: standardize bids and info to [0, 1]
-        third_last, second_last, last, WE_bid, NS_bid, points = obs
+        third_last, second_last, last, WE_bid, NS_bid, points = o
         bids = np.array([third_last, second_last, last])
         passes = (bids == 0)
         info = np.array([WE_bid, NS_bid, points])
         return np.hstack((bids, passes, info))
-        
+    
+    # network parameters
     n_layers = 2
     D_in = 9
-    D_h = 25
+    D_h = 15
     D_out = MAX_BID + 1
     params = n_layers, D_in, D_h, D_out
-        
+    
     new_model = nLayerNet
     new_agent = lambda : PolicyGradientNNAgent(new_model, params, obs_to_input, \
-                                               lr=1e-3, df=0.9)
+                                               lr=1e-3, df=0.01)
     
+    # initialize game and models for each agent
     env = BridgeEnv()
     start_name = 'West'
-    env = BridgeEnv()
     agents = {
         'East': new_agent(),
         'West': new_agent(),
@@ -230,7 +304,7 @@ def train(iterations, episodes, verbose=False):
     def sample_teams(train_id, iter):
         # train_id is the current team being trained (0 or 1)
         # the opposing team is chosen from iteration i ~ Uniform[dv, v] where
-        # v = iter (the current iteration)
+        # v = iter (the current iteration) and 0 < d < 1
         current_agents = {}
         i = np.random.randint(int(delta * iter), iter + 1)
         for name in agents:
@@ -241,11 +315,18 @@ def train(iterations, episodes, verbose=False):
                 
         return current_agents
     
+    start = time.time()
+    
     # main training loop
     for iter in range(iterations):
     
-        # TODO: write eval function to print training progress to terminal
-        # eval(agent_history[-1], iter)
+        if iter % 10 == 0:
+            print("Iteration %d" % iter)
+            
+            results = [play(agent_history[-1]) for _ in range(1000)]
+            WE_wins = sum(result['West'] == 1 for result in results)
+            
+            print("West/East won %d / %d games" % (WE_wins, 1000))
         
         # train each team on its own rollout
         for train_id in np.random.permutation(len(teams)):
@@ -268,11 +349,7 @@ def train(iterations, episodes, verbose=False):
                     action = curr_agent.move(obs, env.invalid_moves())
                     obs, reward, done, info = env.step(action)
                     if verbose: env.render()
-                    
-                    if done and verbose: env.show_result(True)
-                
-                # TODO: once reward is fixed we should get rid of this line
-                reward = {name: 0 for name in agents}
+                    if verbose and done: env.show_result(True)
                 
                 # tell agents their reward at the end of the episode
                 for name in teams[train_id]:
@@ -285,10 +362,134 @@ def train(iterations, episodes, verbose=False):
         # update completed history
         agent_history.append(copy_agents())
     
-    return agents
+    end = time.time()
+    n_games = iterations * episodes * len(teams)
+    print("\nTraining complete")
+    print("Total time for %d games: %.3f s" % (n_games, end - start))
+    print("Game rate = %.0f games/s" % (n_games / (end - start)))
+    
+    return agent_history[-1]
 
+class PassAgent:
+    
+    def move(self, obs, invalid_moves=[], display=False):
+        if display: print("PassAgent always passes")
+        return PASS
+    
+def train_vs_pass(iterations, episodes, verbose=False):
+    # train for some number of iterations; in each iteration we play out
+    # some number of episodes and then update the weights of each agent
+    
+    def obs_to_input(o):
+        # takes observation vector o and converts it into input for the network
+        # TODO: standardize bids and info to [0, 1]
+        third_last, second_last, last, WE_bid, NS_bid, points = o
+        bids = np.array([third_last, second_last, last])
+        passes = (bids == 0)
+        info = np.array([WE_bid, NS_bid, points])
+        return np.hstack((info))
+    
+    # network parameters
+    n_layers = 2
+    D_in = 3
+    D_h = 15
+    D_out = MAX_BID + 1
+    params = n_layers, D_in, D_h, D_out
+    
+    new_model = PassOrBidNet
+    new_agent = lambda : PolicyGradientNNAgent(new_model, params, obs_to_input, \
+                                               lr=1e-3, df=0.99)
+    
+    # initialize game and models for each agent
+    env = BridgeEnv()
+    start_name = 'West'
+    agents = {
+        'East': new_agent(),
+        'West': new_agent(),
+        'North': new_agent(),
+        'South': new_agent()
+    }
+    teams = [['East', 'West'], ['North', 'South']]
+    
+    def copy_agents():
+        # create a copy of the most recently updated agents with frozen weights
+        return {name: agent.copy() for name, agent in agents.items()}
+    
+    def sample_teams(train_id):
+        # train_id is the current team being trained (0 or 1)
+        # the opposing team is two agents who always pass
+        current_agents = {}
+        for name in agents:
+            if name in teams[train_id]:
+                current_agents[name] = agents[name]
+            else:
+                current_agents[name] = PassAgent()
+                
+        return current_agents
+    
+    start = time.time()
+    
+    # main training loop
+    for iter in range(iterations):
+    
+        if iter % 10 == 0:
+            print("Iteration %d" % iter)
+            eval_agents = copy_agents()
+            eval_agents['North'] = PassAgent()
+            eval_agents['South'] = PassAgent()
+            results = [play(eval_agents) for _ in range(1000)]
+            WE_wins = sum(result['West'] == 1 for result in results)
+            
+            print("West/East won %d / %d games" % (WE_wins, 1000))
+        
+        # train each team on its own rollout
+        for train_id in np.random.permutation(len(teams)):
+            
+            # play out each episode
+            for ep in range(episodes):
+                
+                current_agents = sample_teams(train_id)
+                observation = env.reset(start_player_name=start_name)
+                for name in teams[train_id]:
+                    current_agents[name].new_episode()
+                    
+                done = False
+                while not done:
+                    done, obs, info = check_game_status(env)
+
+                    curr_agent = current_agents[info['cur_player']]
+                    if verbose: env.show_turn(True)
+                        
+                    action = curr_agent.move(obs, env.invalid_moves())
+                    obs, reward, done, info = env.step(action)
+                    if verbose: env.render()
+                    if verbose and done: env.show_result(True)
+                
+                # tell agents their reward at the end of the episode
+                for name in teams[train_id]:
+                    current_agents[name].store_reward(reward[name])
+                
+            # adjust agent parameters based on played episodes
+            for name in teams[train_id]:
+                current_agents[name].update()
+    
+    end = time.time()
+    n_games = iterations * episodes * len(teams)
+    print("\nTraining complete")
+    print("Total time for %d games: %.3f s" % (n_games, end - start))
+    print("Game rate = %.0f games/s" % (n_games / (end - start)))
+    
+    return copy_agents()
+    
 if __name__ == '__main__':
     
-    iterations = 1
-    episodes = 3
-    trained_agents = train(iterations, episodes, verbose=True)
+    iterations = 100
+    episodes = 1000
+    trained_agents = train_vs_pass(iterations, episodes, verbose=False)
+    
+    n_games = 5
+    
+    print("\nPlaying %d games between trained agents" % n_games)
+    
+    for g in range(n_games):
+        play(trained_agents, verbose=True)

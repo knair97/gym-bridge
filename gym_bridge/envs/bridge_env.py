@@ -38,7 +38,7 @@ def check_game_status(env):
     '''
     info = {
         'cur_player': env.state.next_player.name,
-        'throw_out': env.done and len(env.state.bid_history) == 4
+        'throw_out': reward_calc_helper(env.state)[0] == 0
     }
     return (env.done, env._get_obs(), info)
 
@@ -170,7 +170,8 @@ class Player:
         Note: str(card) implicitly calls __str__
         """
         return self.get_name() + ": " + \
-            ", ".join([str(card) for card in self.get_cards()])
+            ", ".join([str(card) for card in self.get_cards()]) + \
+            " (%d points)" % self.points
 
 
 class GameState:
@@ -268,7 +269,10 @@ class GameState:
 
 class BridgeEnv(gym.Env):
     """
-    TODO: This is likely very wrong - definitely look over the logic and format of it
+    TODO:
+        - more sophisticated reward
+        - show_result is for visualizing, it shouldn't returning anything
+        - ideally result is somehow encoded in the reward of the final action
     """
     metadata = {'render.modes': ['human']}
 
@@ -282,14 +286,11 @@ class BridgeEnv(gym.Env):
         self.action_space = spaces.Discrete(MAX_BID + 1)
         
         # In the observation space:
-        #   there are 3 tuples corresponding to the actions of the 3
-        #   previous players, represented the same way as the action space
-        #   The next two tuples correspond to the max bid of West/East, and
-        #   North/South respectively
-        #   The last tuple is the number of points of the current player
-        # TODO:
-        #   player also needs to observe their own point total
-        #       -- but do we need to include this on every turn?
+        #   The first 3 numbers correspond to the actions of the 3
+        #   previous players, represented the same way as the action space.
+        #   The next two numbers correspond to the max bid of West/East, and
+        #   North/South respectively. The last number is the point total
+        #   of the current player
         self.observation_space = spaces.Tuple((   \
             spaces.Discrete(MAX_BID + 1),   \
             spaces.Discrete(MAX_BID + 1),   \
@@ -351,7 +352,6 @@ class BridgeEnv(gym.Env):
         if self.done:
             return self._get_obs(), 0, True, None
 
-        reward = 0
         prev_status = reward_calc_helper(self.state)
         
         # Make the bid
@@ -389,8 +389,32 @@ class BridgeEnv(gym.Env):
         # If S < B, then
         #   the reward for the max bidding team is 0
         #   the reward for the opposing team is 2 * (B - S)
-        if status[0] != 1:
+        # 
+        # For now I've implemented a simple zero-sum reward:
+        # 1 for max bidder's team and -1 for opposing team if S >= B
+        # -1 for max bidder's team and 1 for opposing team if S < B
+        state_id, WE, NS = status
+        reward = {}
+        WE_reward = 0
+        if state_id != 1:
             self.done = True
+            if state_id == 2:
+                # WE won the bidding
+                WE_reward = 1 if WE >= 0 else -1
+            elif state_id == 3:
+                # WE lost the bidding
+                WE_reward = 1 if NS < 0 else -1
+        else:
+            # bidding hasn't ended
+            WE_reward = 0
+                
+        NS_reward = -WE_reward
+        reward["West"] = WE_reward
+        reward["East"] = WE_reward
+        reward["North"] = NS_reward
+        reward["South"] = NS_reward
+        
+        '''
         if status[0] == 1:
             if self.state.bid_history[-1][1] == PASS:
                 reward = 0
@@ -405,6 +429,7 @@ class BridgeEnv(gym.Env):
                     reward = status[2] - prev_status[2]
                 else:
                     reward = self.state.ns_sum_points * -1
+        '''
 
         additional_info = {
             'cur_player': self.state.next_player.name
@@ -422,7 +447,6 @@ class BridgeEnv(gym.Env):
         history = self.state.bid_history
         pad = [PASS] * (3 - len(history))
         obs = pad + [turn[1] for turn in history[-3:]]
-
 
         we_final_bid, ns_final_bid = 0, 0
     
@@ -481,13 +505,13 @@ class BridgeEnv(gym.Env):
                 max_bid = status[1][4]
                 num_points = self.state.players['North'].get_points() + self.state.players['South'].get_points()
             if max_bid < num_points:
-                msg = "Team {0} wins bidding. They bid under their max winnable bid by {1} hands!" \
+                msg = "Team {0} wins bidding. They bid under their max winnable bid by {1} points!" \
                     .format(team_name, num_points - max_bid)
             elif status[idx] == 0:
                 msg = "Team {0} wins bidding and bids exactly their max winnable bid!" \
                     .format(team_name)
             else:
-                msg = "Team {0} wins bidding. They bid over their max winnable bid by {1} hands!" \
+                msg = "Team {0} wins bidding. They bid over their max winnable bid by {1} points!" \
                     .format(team_name, max_bid - num_points)
 
             showfn(msg + '\n')
